@@ -1,5 +1,5 @@
 # PIPELINE DEFINITION
-# Name: 7-get-data-train-upload
+# Name: sonar_get_train
 components:
   comp-get-data:
     executorLabel: exec-get-data
@@ -45,7 +45,7 @@ deploymentSpec:
         - -c
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
         - sh
@@ -60,10 +60,10 @@ deploymentSpec:
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef get_data(data_output_path: OutputPath()):\n    import urllib.request\n\
-          \    print(\"starting download...\")\n    url = \"https://raw.githubusercontent.com/rh-aiservices-bu/fraud-detection/main/data/card_transdata.csv\"\
+          \    print(\"starting download...\")\n    url = \"https://github.com/arckrish/Train-Sample-Data.git/main/data/sonar.csv\"\
           \n    urllib.request.urlretrieve(url, data_output_path)\n    print(\"done\"\
           )\n\n"
-        image: quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301
+        image: quay.io/arckrish/custom-wb-images:jupyter-pytorch-ubi8-python-3.9-vz1.0_20240711
     exec-train-model:
       container:
         args:
@@ -76,10 +76,10 @@ deploymentSpec:
         - -c
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
           \  python3 -m pip install --quiet --no-warn-script-location 'tf2onnx' 'seaborn'\
-          \ && \"$0\" \"$@\"\n"
+          \ 'pandas' 'torch' 'torch.nn' 'torch.optim' && \"$0\" \"$@\"\n"
         - sh
         - -ec
         - 'program_path=$(mktemp -d)
@@ -92,62 +92,32 @@ deploymentSpec:
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef train_model(data_input_path: InputPath(), model_output_path:\
-          \ OutputPath()):\n    import numpy as np\n    import pandas as pd\n    from\
-          \ keras.models import Sequential\n    from keras.layers import Dense, Dropout,\
-          \ BatchNormalization, Activation\n    from sklearn.model_selection import\
-          \ train_test_split\n    from sklearn.preprocessing import StandardScaler\n\
-          \    from sklearn.utils import class_weight\n    import tf2onnx\n    import\
-          \ onnx\n    import pickle\n    from pathlib import Path\n\n    # Load the\
-          \ CSV data which we will use to train the model.\n    # It contains the\
-          \ following fields:\n    #   distancefromhome - The distance from home where\
-          \ the transaction happened.\n    #   distancefromlast_transaction - The\
-          \ distance from last transaction happened.\n    #   ratiotomedianpurchaseprice\
-          \ - Ratio of purchased price compared to median purchase price.\n    # \
-          \  repeat_retailer - If it's from a retailer that already has been purchased\
-          \ from before.\n    #   used_chip - If the (credit card) chip was used.\n\
-          \    #   usedpinnumber - If the PIN number was used.\n    #   online_order\
-          \ - If it was an online order.\n    #   fraud - If the transaction is fraudulent.\n\
-          \    Data = pd.read_csv(data_input_path)\n\n    # Set the input (X) and\
-          \ output (Y) data.\n    # The only output data we have is if it's fraudulent\
-          \ or not, and all other fields go as inputs to the model.\n\n    X = Data.drop(columns\
-          \ = ['repeat_retailer','distance_from_home', 'fraud'])\n    y = Data['fraud']\n\
-          \n    # Split the data into training and testing sets so we have something\
-          \ to test the trained model with.\n\n    # X_train, X_test, y_train, y_test\
-          \ = train_test_split(X,y, test_size = 0.2, stratify = y)\n    X_train, X_test,\
-          \ y_train, y_test = train_test_split(X,y, test_size = 0.2, shuffle = False)\n\
-          \n    X_train, X_val, y_train, y_val = train_test_split(X_train,y_train,\
-          \ test_size = 0.2, stratify = y_train)\n\n    # Scale the data to remove\
-          \ mean and have unit variance. This means that the data will be between\
-          \ -1 and 1, which makes it a lot easier for the model to learn than random\
-          \ potentially large values.\n    # It is important to only fit the scaler\
-          \ to the training data, otherwise you are leaking information about the\
-          \ global distribution of variables (which is influenced by the test set)\
-          \ into the training set.\n\n    scaler = StandardScaler()\n\n    X_train\
-          \ = scaler.fit_transform(X_train.values)\n\n    Path(\"artifact\").mkdir(parents=True,\
-          \ exist_ok=True)\n    with open(\"artifact/test_data.pkl\", \"wb\") as handle:\n\
-          \        pickle.dump((X_test, y_test), handle)\n    with open(\"artifact/scaler.pkl\"\
-          , \"wb\") as handle:\n        pickle.dump(scaler, handle)\n\n    # Since\
-          \ the dataset is unbalanced (it has many more non-fraud transactions than\
-          \ fraudulent ones), we set a class weight to weight the few fraudulent transactions\
-          \ higher than the many non-fraud transactions.\n\n    class_weights = class_weight.compute_class_weight('balanced',classes\
-          \ = np.unique(y_train),y = y_train)\n    class_weights = {i : class_weights[i]\
-          \ for i in range(len(class_weights))}\n\n\n    # Build the model, the model\
-          \ we build here is a simple fully connected deep neural network, containing\
-          \ 3 hidden layers and one output layer.\n\n    model = Sequential()\n  \
-          \  model.add(Dense(32, activation = 'relu', input_dim = len(X.columns)))\n\
-          \    model.add(Dropout(0.2))\n    model.add(Dense(32))\n    model.add(BatchNormalization())\n\
-          \    model.add(Activation('relu'))\n    model.add(Dropout(0.2))\n    model.add(Dense(32))\n\
-          \    model.add(BatchNormalization())\n    model.add(Activation('relu'))\n\
-          \    model.add(Dropout(0.2))\n    model.add(Dense(1, activation = 'sigmoid'))\n\
-          \    model.compile(optimizer='adam',loss='binary_crossentropy',metrics=['accuracy'])\n\
-          \    model.summary()\n\n\n    # Train the model and get performance\n\n\
-          \    epochs = 2\n    history = model.fit(X_train, y_train, epochs=epochs,\
-          \ \\\n                        validation_data=(scaler.transform(X_val.values),y_val),\
-          \ \\\n                        verbose = True, class_weight = class_weights)\n\
-          \n    # Save the model as ONNX for easy use of ModelMesh\n\n    model_proto,\
-          \ _ = tf2onnx.convert.from_keras(model)\n    print(model_output_path)\n\
-          \    onnx.save(model_proto, model_output_path)\n\n"
-        image: quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301
+          \ OutputPath()):\n    import numpy as np\n    import pandas as pd\n    import\
+          \ torch\n    import tf2onnx\n    import onnx\n    import torch.nn as nn\n\
+          \    import torch.optim as optim\n    from torch.utils.data import DataLoader\n\
+          \    from sklearn.preprocessing import LabelEncoder\n    from sklearn.model_selection\
+          \ import train_test_split\n\n    # Read data, convert to NumPy arrays\n\
+          \    data = pd.read_csv(\"data/sonar.csv\", header=None)\n    X = data.iloc[:,\
+          \ 0:60].values\n    y = data.iloc[:, 60].values\n    data.head()\n\n   \
+          \ # encode class values as integers\n    encoder = LabelEncoder()\n    encoder.fit(y)\n\
+          \    y = encoder.transform(y)\n\n    # convert into PyTorch tensors\n  \
+          \  X = torch.tensor(X, dtype=torch.float32)\n    y = torch.tensor(y, dtype=torch.float32).reshape(-1,\
+          \ 1)\n\n    # train-test split for evaluation of the model\n    X_train,\
+          \ X_test, y_train, y_test = train_test_split(X, y, train_size=0.7, shuffle=True)\n\
+          \n    # set up DataLoader for training set\n    loader = DataLoader(list(zip(X_train,\
+          \ y_train)), shuffle=True, batch_size=16)\n\n\n    # create model\n    model\
+          \ = nn.Sequential(\n        nn.Linear(60, 60),\n        nn.ReLU(),\n   \
+          \     nn.Linear(60, 30),\n        nn.ReLU(),\n        nn.Linear(30, 1),\n\
+          \        nn.Sigmoid()\n    )\n\n\n    # Train the model\n    n_epochs =\
+          \ 200\n    loss_fn = nn.BCELoss()\n    optimizer = optim.SGD(model.parameters(),\
+          \ lr=0.1)\n    model.train()\n    for epoch in range(n_epochs):\n      \
+          \  for X_batch, y_batch in loader:\n            y_pred = model(X_batch)\n\
+          \            loss = loss_fn(y_pred, y_batch)\n            optimizer.zero_grad()\n\
+          \            loss.backward()\n            optimizer.step()\n\n    # Save\
+          \ the model as ONNX for easy use of ModelMesh\n\n    model_proto, _ = tf2onnx.convert.from_keras(model)\n\
+          \    print(model_output_path)\n    onnx.save(model_proto, model_output_path)\n\
+          \n"
+        image: quay.io/arckrish/custom-wb-images:jupyter-pytorch-ubi8-python-3.9-vz1.0_20240711
     exec-upload-model:
       container:
         args:
@@ -160,7 +130,7 @@ deploymentSpec:
         - -c
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
           \  python3 -m pip install --quiet --no-warn-script-location 'boto3' 'botocore'\
           \ && \"$0\" \"$@\"\n"
@@ -188,10 +158,10 @@ deploymentSpec:
           \ {s3_key}\")\n    bucket.upload_file(input_model_path, s3_key)\n\n"
         env:
         - name: S3_KEY
-          value: models/fraud/1/model.onnx
-        image: quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301
+          value: models/sonar/1/model.onnx
+        image: quay.io/arckrish/custom-wb-images:jupyter-pytorch-ubi8-python-3.9-vz1.0_20240711
 pipelineInfo:
-  name: 7-get-data-train-upload
+  name: archana
 root:
   dag:
     tasks:
@@ -233,7 +203,7 @@ root:
         taskInfo:
           name: upload-model
 schemaVersion: 2.1.0
-sdkVersion: kfp-2.5.0
+sdkVersion: kfp-2.8.0
 ---
 platforms:
   kubernetes:
