@@ -1,5 +1,5 @@
 # PIPELINE DEFINITION
-# Name: sonar_get_train
+# Name: sonar-get-data-train
 components:
   comp-get-data:
     executorLabel: exec-get-data
@@ -161,7 +161,7 @@ deploymentSpec:
           value: models/sonar/1/model.onnx
         image: quay.io/arckrish/custom-wb-images:jupyter-pytorch-ubi8-python-3.9-vz1.0_20240711
 pipelineInfo:
-  name: archana
+  name: sonar-get-data-train
 root:
   dag:
     tasks:
